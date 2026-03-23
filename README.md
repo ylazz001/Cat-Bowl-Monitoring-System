@@ -1,682 +1,285 @@
-# Cat-Bowl-Monitoring-System
-An ML-based anomaly detection system that monitors cat food bowl levels using computer vision and provides intelligent alerts when the bowl needs attention.
-🎯 Project Overview
-This system uses deep learning to automatically monitor a cat food bowl and alert when it needs refilling. Unlike simple image classification, it employs feature-based anomaly detection to distinguish between full, partially-eaten, and empty bowls with high accuracy.
-Key Innovation: Switched from reconstruction-based autoencoder (9% accuracy) to feature extraction + SVM approach (87% accuracy) after discovering the "autoencoder paradox" where the model reconstructed defects too well to detect them.
+# Cat Bowl Monitoring System
 
-✨ Features
+An anomaly detection system that monitors a cat food bowl in real time using computer vision. A phone camera streams video to a PC, where a deep learning model analyzes the bowl every 20 minutes and plays a meow sound when it's time to refill.
 
-Real-time monitoring via webcam or phone camera
-Two-threshold alert system for graduated responses:
+---
 
-🔔 "Bowl touched" notification (cat is eating)
-⚠️ "Refill needed" urgent alert (bowl getting empty)
+## How It Works
 
+```
+Phone Camera (Camo) → PC (OpenCV) → Encoder (ResNet18) → Features (25,088-dim) → One-Class SVM → Decision Score → Threshold Logic → Alert
+```
 
-87% accuracy with 91% recall (catches 91% of empty/low bowls)
-94% precision (when it alerts, it's right 94% of the time)
-Fast inference (~0.02 seconds per frame)
-CPU-friendly (no GPU required)
+1. **Camo app** streams the phone camera to the PC at 1920×1080
+2. **OpenCV** captures a frame every 20 minutes
+3. **ResNet18 encoder** converts the image into a 25,088-dimensional feature vector
+4. **One-Class SVM** scores how "normal" (full) the bowl looks
+5. **Threshold logic** classifies the bowl as Full, Touched, or Refill Needed
+6. **Streamlit web app** displays the result and plays a meow alert if refill is needed
 
+Accessible from any device on the local network at `http://192.168.1.11:8501`.
 
-🏗️ Architecture
-System Design
-Image → Encoder (ResNet18) → Features (25,088-dim) → SVM → Decision Score → Alert Logic
-Component 1: Autoencoder (Feature Extractor)
-Purpose: Extracts high-dimensional features from bowl images
-Architecture:
+---
 
-Base: ResNet18 pre-trained on ImageNet (transfer learning)
-Encoder: Layers conv1 → bn1 → relu → maxpool → layer1 → layer2 → layer3 → layer4
-Bottleneck: 7×7×512 (25,088 features when flattened)
-Decoder: 5 upsampling blocks (Upsample + Conv2D) - used only during training
+## Architecture
 
-Training:
+### Component 1: Autoencoder (Feature Extractor)
 
-Loss function: MSE (Mean Squared Error)
-Optimizer: Adam with differential learning rates
+The autoencoder learns what a full bowl looks like by compressing and reconstructing full bowl images. Only the encoder is used at inference — the decoder is discarded after training.
 
-Encoder: 0.00005 (fine-tune slowly)
-Decoder: 0.001 (train faster)
+- **Encoder:** ResNet18 pre-trained on ImageNet (transfer learning), layers conv1 through layer4
+- **Bottleneck:** 7×7×512 = 25,088 features when flattened
+- **Decoder:** 5 upsampling blocks (used only during training)
+- **Loss function:** MSE (Mean Squared Error)
+- **Optimizer:** Adam with differential learning rates — encoder at 0.00005 (slow fine-tuning), decoder at 0.001
+- **Epochs:** 40
+- **Training data:** 255 full bowl images only
 
+### Component 2: One-Class SVM (Anomaly Detector)
 
-Epochs: 40
-Training data: 102 full bowl images only
-Data augmentation: horizontal flip, ±10° rotation, brightness/contrast jitter, small translations
+The SVM draws a boundary around the feature vectors of full bowl images. Anything outside the boundary is flagged as an anomaly.
 
-File: autoencoder_cat_food_MSE.pth (~45 MB)
-Component 2: One-Class SVM (Anomaly Detector)
-Purpose: Learns boundary of "normal" (full bowl) in feature space
-Algorithm: One-Class SVM with RBF kernel
-Parameters:
+- **Algorithm:** One-Class SVM with RBF kernel
+- **nu=0.05** — allows 5% of training data to fall outside the boundary
+- **Input:** 25,088-dimensional feature vectors from the encoder
+- **Output:** A decision score (positive = normal, negative = anomaly)
 
-kernel='rbf' - Radial Basis Function for flexible, curved decision boundaries
-nu=0.05 - Expected fraction of outliers (5%)
-gamma='scale' - Auto-adjusted based on data
+### Three-Tier Alert System
 
-Training:
-
-Input: 25,088-dimensional feature vectors from 102 full bowl images
-Output: Decision function that scores how "normal" an image is
-Positive scores → Normal (full bowl)
-Negative scores → Anomaly (not full)
-
-File: svm_detector_MSE_best.pkl (~2 MB)
-
-📊 Performance
-Metrics
-MetricValueInterpretationAccuracy87%Overall correctnessRecall91%Catches 91% of empty/low bowlsPrecision94%94% of alerts are legitimateF1 Score0.91Excellent balance
-Confusion Matrix
-                 Predicted
-               Good  Defect
-Actual Good  │   8  │  11  │  19 total
-             ├─────┼──────┤
-     Defect  │  17  │ 175  │  192 total
-Breakdown:
-
-✅ 175 true positives: Correctly caught defects
-✅ 8 true negatives: Correctly identified full bowls
-⚠️ 17 false negatives: Missed defects (mostly 90%+ full bowls)
-⚠️ 11 false positives: False alarms (irregular food shapes)
-
-Decision Score Distribution
-Score Range: -1.21 to +0.20
-
-Full bowls:     -0.25 to +0.19  (mostly positive)
-Defect bowls:   -1.21 to +0.20  (mostly negative)
-Clear separation with minimal overlap
-
-🚦 Two-Threshold Alert System
-Threshold Design
-Threshold 1 (Touched): -0.02
-
-Positioned at 90th percentile of defect scores
-Sensitive detection for awareness
-
-Threshold 2 (Refill): -0.31
-
-Positioned at median of defect scores
-Reliable detection for action
-
-Alert Logic
-pythonif score >= -0.02:
-    status = "Full"
-    alert = None
-    # Bowl is full, no action needed
-    
-elif score >= -0.31:
-    status = "Touched - Cat eating"
-    alert = "Info notification 🔔"
-    # Bowl touched, cat is eating
-    
+```python
+if score >= 0.12:
+    status = "Full"          # No action needed
+elif score >= -0.05:
+    status = "Touched"       # Cat is eating, monitor
 else:
-    status = "Refill needed"
-    alert = "Urgent alert ⚠️"
-    # Bowl low/empty, time to refill
+    status = "Refill needed" # Plays meow sound alert
 ```
 
-### Real-World Example
-
-**8:00 AM:** Fill bowl → Score: +0.05 → "Full" → No alert
-
-**10:30 AM:** Cat eats breakfast (bowl ~80% full) → Score: -0.10 → "Touched" → 🔔 "Fluffy is eating!"
-
-**Throughout day:** Cat grazes, bowl gradually empties → Score: -0.15 to -0.25 → Still "Touched"
-
-**6:00 PM:** Bowl low (~30% full) → Score: -0.40 → "Refill needed" → ⚠️ "Refill bowl!"
+Thresholds were calibrated by running a grid search across the test set, optimizing for catching eaten bowls while minimizing false alarms on full bowls.
 
 ---
 
-## 📁 Project Structure
-```
-defect-detection/
-├── data/
-│   └── raw/archive/cat_food/
-│       ├── train/
-│       │   └── good/                    # 102 full bowl images
-│       └── test/
-│           ├── good/                    # 19 full bowl images
-│           └── eaten/                   # 192 defective images
-├── models/
-│   └── saved_models/
-│       ├── autoencoder_cat_food_MSE.pth # Trained autoencoder
-│       └── svm_detector_MSE_best.pkl    # Trained SVM
-├── notebooks/
-│   └── training_notebook.ipynb          # Full training pipeline
-├── app/
-│   └── streamlit_app.py                 # Deployment application (to be built)
-└── README.md
-```
+## Performance
+
+**At default SVM boundary (score = 0):**
+
+| Metric | Value |
+|--------|-------|
+| Accuracy | 60% |
+| Recall | 43% |
+| Precision | 96% |
+| F1 Score | 0.60 |
+
+The high precision means when the model flags a bowl as eaten, it's right 96% of the time. The low recall at the default boundary is why we use custom thresholds.
+
+**At custom thresholds (touched=0.12, refill=-0.05):**
+
+| Metric | Value |
+|--------|-------|
+| Good bowls correctly identified | 42/56 (81%) |
+| Eaten bowls correctly caught | 94/122 (77%) |
+| Overall accuracy | 78% |
+
+We prioritized catching eaten bowls over avoiding false alarms — missing an eaten bowl means the cat doesn't get fed, while a false alarm just means you glance at the camera.
+
+**Decision Score Distribution:**
+
+| Category | Score Range |
+|----------|------------|
+| Full bowls | -0.10 to +0.33 |
+| Eaten bowls | -0.54 to +0.26 |
 
 ---
 
-## 🔬 Technical Deep Dive
+## Dataset
 
-### Why Feature-Based Approach?
+```
+data/raw/archive/cat_food/
+├── train/
+│   └── good/          # 255 full bowl images (training)
+└── test/
+    ├── good/          # 56 full bowl images (testing)
+    └── eaten/         # 122 eaten bowl images (testing)
+```
 
-**Initial Approach: Reconstruction-Based Autoencoder**
-- Train autoencoder on full bowls
-- Compare original vs reconstructed images
-- High reconstruction error → Anomaly
+**Training images** were collected over several days with the bowl full, rotated 45° between shots under both natural and warm house lighting. All training images are full bowls only — the model never sees eaten bowls during training.
 
-**Problem: Autoencoder Paradox**
-- Model became too good at reconstructing everything
-- Partially-eaten bowls still contain same visual elements (pink food, silver bowl, brown background)
-- Just less food, not fundamentally different
-- Autoencoder reconstructed defects well → no separation
-- **Result: 9% accuracy** ❌
-
-**Solution: Feature-Based Detection**
-- Use encoder to extract features, ignore decoder for detection
-- Train One-Class SVM on feature vectors
-- SVM learns boundary in high-dimensional feature space
-- Can separate subtle differences reconstruction couldn't capture
-- **Result: 87% accuracy** ✅
-
-### Architecture Decisions
-
-**Why ResNet18?**
-- Pre-trained on ImageNet (transfer learning)
-- Good balance of accuracy and speed
-- Not too deep (faster than ResNet50)
-- Industry standard, well-supported
-
-**Why Stop at Layer4 (7×7 bottleneck)?**
-- Tested layer3 (14×14) → 79% accuracy (too much capacity, reconstructed everything)
-- Layer4 (7×7) → 87% accuracy (optimal compression)
-- Right balance: enough detail for features, enough compression for anomaly detection
-
-**Why MSE Loss over L1?**
-- Tested both during training
-- L1 model: 79% accuracy
-- MSE model: 87% accuracy
-- MSE better for this specific dataset
-
-**Why One-Class SVM?**
-- Only have labeled "full bowl" examples for training
-- Defects are diverse (90% full, 50% full, empty, etc.)
-- One-Class learns boundary of "normal" without needing defect examples
-- Perfect fit for anomaly detection
-
-### Data Collection Strategy
-
-**Training Set (102 images):**
-- 100% full bowls only
-- Collected over 5-7 days
-- Different times of day (lighting variation)
-- Manual rotation 30° between shots (4 images per filling)
-- Natural variation in food shape/placement
-
-**Test Set (211 images):**
-- 19 full bowls (held out from training)
-- 192 defective bowls at various fill levels:
-  - ~20% at 80-95% full (barely touched)
-  - ~30% at 50-80% full (partially eaten)
-  - ~30% at 20-50% full (getting low)
-  - ~20% at <20% full (nearly empty)
-
-**Data Augmentation (training only):**
-- Random horizontal flip (50% probability)
-- Random rotation (±10°)
-- Color jitter (brightness ±20%, contrast ±15%)
-- Random affine transformation (translate ±5%)
-- **Why:** Increases robustness, simulates camera movement/lighting changes
+**Test images** include bowls at various fill levels, from barely touched to completely empty.
 
 ---
 
-## 🛠️ Installation & Usage
+## Data Augmentation (Training Only)
+
+```python
+transforms.RandomResizedCrop(size=(224,224), scale=(0.90, 1.0))
+transforms.RandomHorizontalFlip(p=0.5)
+transforms.RandomRotation(degrees=10)
+transforms.ColorJitter(brightness=0.1, contrast=0.0, saturation=0.0, hue=0.0)
+transforms.RandomAffine(degrees=0, translate=(0.10, 0.10))
+```
+
+**Key decision:** Only brightness is varied in ColorJitter (not contrast, saturation, or hue). The color difference between pink food and silver empty bowl is the primary signal — augmenting color/hue would teach the model to ignore the very thing it needs to detect. Brightness-only handles lighting variation without masking the signal.
+
+No denoising is applied. A denoising autoencoder was tested and reduced performance because it taught the model to look past small pixel-level changes — exactly the kind of changes that distinguish full from eaten.
+
+---
+
+## What We Tried and What Worked
+
+| Configuration | Accuracy | F1 | Notes |
+|--------------|----------|-----|-------|
+| L1 loss + ColorJitter + Denoiser | 59% | 0.68 | First attempt |
+| L1 loss - ColorJitter + Denoiser | 65% | 0.78 | Color matters |
+| L1 loss - ColorJitter - Denoiser | 72% | 0.80 | Denoiser was hurting |
+| Frozen encoder + L1 | 60% | 0.71 | Fine-tuning helps |
+| **MSE loss - Denoiser + brightness 0.1 + 255 images** | **78%*** | **—** | **Final model** |
+
+*78% calculated at custom thresholds (0.12 and -0.05).
+
+**Key findings:**
+- **MSE > L1** for this task — MSE penalizes large errors more, producing better feature separation
+- **Removing ColorJitter** improved accuracy because color is the key signal (pink food vs silver bowl)
+- **Removing denoiser** improved accuracy because the model was learning to ignore subtle changes it needed to detect
+- **Freezing the encoder** made things worse — the small fine-tuning was actually helping, not hurting
+- **More training data** (116 → 255 images) was the single biggest improvement for reducing false positives on full bowls
+
+---
+
+## Installation & Usage
 
 ### Prerequisites
+
 ```
 Python 3.8+
 PyTorch 2.0+
-OpenCV
-scikit-learn
-NumPy
-Pillow
-Install Dependencies
-bashpip install torch torchvision opencv-python scikit-learn numpy pillow streamlit
-Model Files
-Download trained models (or use your own):
+```
 
-autoencoder_cat_food_MSE.pth (~45 MB)
-svm_detector_MSE_best.pkl (~2 MB)
+### Install Dependencies
 
-Place in models/saved_models/ directory.
-Load Models
-pythonimport torch
+```bash
+pip install torch torchvision opencv-python scikit-learn numpy pillow streamlit
+```
+
+### Model Files
+
+Place in `models/saved_models/`:
+- `autoencoder_cat_food_MSE.pth` (~45 MB)
+- `svm_detector_MSE.pkl` (~2 MB)
+
+### Run the App
+
+```bash
+streamlit run app/streamlit_app.py
+```
+
+Access from any device on the local network at `http://[your-pc-ip]:8501`.
+
+### Run Inference Manually
+
+```python
+import torch
 import pickle
-from model import DefectAutoencoder  # See model definition below
+import numpy as np
+from PIL import Image
 
-# Load autoencoder
+# Load models
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = DefectAutoencoder()
 model.load_state_dict(torch.load('models/saved_models/autoencoder_cat_food_MSE.pth', weights_only=False))
 model = model.to(device)
 model.eval()
 
-# Load SVM
-with open('models/saved_models/svm_detector_MSE_best.pkl', 'rb') as f:
+with open('models/saved_models/svm_detector_MSE.pkl', 'rb') as f:
     svm = pickle.load(f)
-Run Inference
-pythonfrom PIL import Image
-import numpy as np
 
-# Load and preprocess image
-image = Image.open('path/to/bowl_image.jpg')
-image = image.resize((224, 224))
+# Process image
+image = Image.open('path/to/bowl_image.jpg').resize((224, 224))
 img_array = np.array(image) / 255.0
-img_array = img_array.transpose(2, 0, 1).astype(np.float32)
-img_tensor = torch.from_numpy(img_array).unsqueeze(0).to(device)
+img_tensor = torch.from_numpy(img_array.transpose(2, 0, 1).astype(np.float32)).unsqueeze(0).to(device)
 
-# Extract features
+# Get prediction
 with torch.no_grad():
     features = model.encoder(img_tensor)
     features = features.flatten(start_dim=1).cpu().numpy()
 
-# Get decision score
 score = svm.decision_function(features)[0]
 
-# Apply thresholds
-if score >= -0.02:
-    status = "Full"
-    alert = None
-elif score >= -0.31:
-    status = "Touched"
-    alert = "Info"
+if score >= 0.12:
+    print(f"Score: {score:.4f} → Full")
+elif score >= -0.05:
+    print(f"Score: {score:.4f} → Touched")
 else:
-    status = "Refill needed"
-    alert = "Urgent"
-
-print(f"Score: {score:.4f}")
-print(f"Status: {status}")
-if alert:
-    print(f"Alert: {alert}")
-Model Definition
-pythonimport torch.nn as nn
-import torchvision.models as models
-
-class DefectAutoencoder(nn.Module):
-    def __init__(self):
-        super(DefectAutoencoder, self).__init__()
-        
-        # Encoder: Pre-trained ResNet18
-        resnet = models.resnet18(weights='IMAGENET1K_V1')
-        self.encoder = nn.Sequential(
-            resnet.conv1,
-            resnet.bn1,
-            resnet.relu,
-            resnet.maxpool,
-            resnet.layer1,
-            resnet.layer2,
-            resnet.layer3,
-            resnet.layer4
-        )
-        
-        # Decoder: Upsampling blocks (used only during training)
-        self.decoder = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.Conv2d(512, 512, kernel_size=3, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(),
-            
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.Conv2d(512, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.Conv2d(64, 3, kernel_size=3, padding=1),
-            nn.Sigmoid()
-        )
-    
-    def forward(self, x):
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
-        return decoded
-
-📋 System Requirements
-Hardware
-
-Camera: Webcam or smartphone camera
-Processor: Any modern CPU (GPU not required)
-Memory: 2GB RAM minimum
-Storage: ~100MB for models and dependencies
-
-Deployment Constraints
-Fixed Setup Required:
-
-Camera position must be fixed (mounted or marked location)
-Bowl placement within ±2 inches of training position
-Consistent background (same table/surface)
-
-Lighting:
-
-Natural room lighting variation is acceptable
-Avoid extreme lighting changes (dark → bright)
-System trained on various times of day
-
-Why Fixed Position?
-
-Simplifies deployment (common in industrial QC systems)
-Reduces complexity and failure modes
-Easy to implement with physical setup (tape bowl location, mount camera)
-
-Future Enhancement:
-
-Image alignment for ±6 inch bowl movement tolerance
-Object detection for fully variable positioning
-
-
-🚀 Deployment Options
-Option 1: Local Streamlit App
-Run on local machine with webcam:
-bashstreamlit run app/streamlit_app.py
-Access from phone via local network: http://[computer-ip]:8501
-Option 2: Phone as Camera
-Use phone camera with IP webcam apps:
-
-Android: IP Webcam
-iOS: EpocCam
+    print(f"Score: {score:.4f} → Refill needed")
+```
 
-Stream to computer running detection system.
-Option 3: Cloud Deployment
-Deploy Streamlit app to cloud:
+---
 
-Streamlit Community Cloud (free)
-Heroku
-AWS/GCP
+## Deployment Setup
 
-Access from anywhere via URL.
+| Component | Details |
+|-----------|---------|
+| Camera | Phone running Camo app, streaming to PC |
+| Resolution | 1920×1080 |
+| Capture | OpenCV, camera index 0 |
+| Check interval | Every 20 minutes (configurable) |
+| Web app | Streamlit at `http://192.168.1.11:8501` |
+| Alert | Meow sound plays through PC speakers when refill needed |
 
-📈 Results & Analysis
-Training Evolution
-Approach 1: Reconstruction-Based (Failed)
+**Fixed setup required:** Camera position and bowl placement must be consistent with training images. This is intentional — it simplifies the problem, similar to how industrial quality control systems use fixed camera mounts.
 
-Architecture: Full autoencoder (encoder + decoder)
-Detection: Reconstruction error threshold
-Result: 9% accuracy
-Issue: Autoencoder paradox - too good at reconstruction
+---
 
-Approach 2: Feature-Based (Success)
+## Project Structure
 
-Architecture: Encoder only + One-Class SVM
-Detection: Decision function in feature space
-Result: 87% accuracy
-Key insight: Features capture patterns reconstruction can't
+```
+defect-detection/
+├── data/
+│   └── raw/archive/cat_food/
+│       ├── train/good/              # 255 full bowl training images
+│       └── test/
+│           ├── good/                # 56 full bowl test images
+│           └── eaten/               # 122 eaten bowl test images
+├── models/saved_models/
+│   ├── autoencoder_cat_food_MSE.pth
+│   └── svm_detector_MSE.pkl
+├── notebooks/
+│   └── 03_model_training_autoencoder.ipynb
+├── app/
+│   └── streamlit_app.py
+├── requirements.txt
+├── LICENSE
+└── README.md
+```
 
-Model Comparison
-ModelLossAccuracyRecallPrecisionF1MSE Autoencoder + SVMMSE87%91%94%0.91L1 Autoencoder + SVML179%81%95%0.87Reconstruction (layer3)MSE9%20%100%0.34Reconstruction (layer4)MSE27%21%96%0.34
-False Positive Analysis
-11 full bowls incorrectly flagged as defects:
+---
 
-Food shape irregular (off-center, uneven distribution)
-Food texture different from training (smooth vs chunky)
-Minor lighting variations
+## Future Improvements
 
-Mitigation:
+- Phone push notifications instead of PC-only meow sound
+- Time-series logging to track eating patterns over days/weeks
+- Image alignment to handle small bowl position changes
+- Multi-bowl support for multiple cats
+- Threshold tuning UI within the Streamlit app
 
-More training data with varied food shapes
-Fine-tune threshold for fewer false alarms
-In practice: occasional false alarm acceptable vs missing empty bowl
+---
 
-False Negative Analysis
-17 defects missed (predicted as full):
+## Tech Stack
 
-12 images: 85-95% full (barely touched)
-4 images: 70-85% full (lightly eaten)
-1 image: ~60% full (edge case)
+Python, PyTorch, OpenCV, scikit-learn, Streamlit, NumPy, Pillow
 
-Interpretation:
+---
 
-Model conservative on nearly-full bowls (reasonable)
-Very few misses below 70% full
-Trade-off: Prefer catching critically low bowls over every bite
+## Author
 
+**Yuri Lazzeretti**
+- [LinkedIn](https://www.linkedin.com/in/yuri-lazzeretti-b63a22220/)
+- [Portfolio](https://www.datascienceportfol.io/ylazz001)
+- ylazz001@gmail.com
 
-🎓 Key Learnings
-What Worked
-✅ Transfer learning with ResNet18
+Background: Mechanical engineer (Boeing, 6 years) transitioning to ML/AI. Master's with honours in Computer Science and Data Analytics.
 
-Pre-trained features crucial for small dataset
-Much better than training encoder from scratch
+---
 
-✅ Feature-based over reconstruction-based
+## License
 
-Solved the autoencoder paradox
-9% → 87% accuracy improvement
-
-✅ Optimal bottleneck compression (7×7)
-
-Layer3 (14×14): Too much capacity
-Layer4 (7×7): Perfect balance
-
-✅ MSE loss over L1
-
-Dataset-specific finding
-79% → 87% accuracy improvement
-
-✅ Data augmentation
-
-Critical with limited training data (102 images)
-Improved robustness to lighting/rotation
-
-✅ Two-threshold system
-
-Graduated alerts better than binary
-Provides awareness + action
-
-What Didn't Work
-❌ Reconstruction-based anomaly detection
-
-Failed due to autoencoder paradox
-Partial bowls too similar to full bowls
-
-❌ Layer3 bottleneck (14×14)
-
-Too much capacity
-Reconstructed defects well → no separation
-
-❌ L1 loss (for this dataset)
-
-MSE performed better
-Dataset/architecture-specific result
-
-Challenges Overcome
-1. Autoencoder Paradox
-
-Problem: Model too good at reconstruction
-Solution: Use features, ignore reconstruction
-
-2. Limited Training Data
-
-Problem: Only 102 full bowl images
-Solution: Data augmentation + transfer learning
-
-3. Class Imbalance
-
-Problem: 102 normal vs 192 defect samples
-Solution: One-Class SVM (trains only on normal)
-
-4. Subtle Differences
-
-Problem: 90% full looks very similar to 100% full
-Solution: Feature-based SVM better at capturing subtle patterns
-
-5. Real-World Variability
-
-Problem: Different lighting, food shapes, bowl positions
-Solution: Augmentation + fixed setup constraints
-
-
-🔮 Future Enhancements
-Immediate (V2)
-
- Streamlit deployment app (in progress)
- Phone notifications (push alerts)
- Time-series logging (track eating patterns)
- Threshold tuning UI (adjust sensitivity)
-
-Short-term
-
- Image alignment (±6 inch bowl movement tolerance)
- Multi-bowl support (multiple cats)
- Water bowl monitoring (separate model)
- Historical analytics (eating pattern graphs)
-
-Long-term
-
- Object detection (fully variable bowl positioning)
- Health monitoring (detect eating pattern changes)
- Portion recommendations (based on consumption)
- Multi-camera support (different rooms)
- Integration with smart feeders
-
-
-💼 Portfolio Highlights
-Technical Skills Demonstrated
-Machine Learning:
-
-Deep learning with PyTorch
-Transfer learning (ResNet18)
-Anomaly detection (One-Class SVM)
-Feature engineering
-Model evaluation and debugging
-
-Computer Vision:
-
-Image preprocessing and augmentation
-Feature extraction from CNNs
-Real-time video processing (planned)
-
-Software Engineering:
-
-End-to-end ML pipeline
-Model serialization and deployment
-Production-minded design (constraints, trade-offs)
-Code organization and documentation
-
-Problem Solving:
-
-Identified and solved autoencoder paradox
-Iterative approach (reconstruction → features)
-Data-driven decisions (MSE vs L1, layer3 vs layer4)
-Practical constraint management
-
-Interview Talking Points
-Why this project stands out:
-
-Solves real problem - Not toy dataset, actual use case
-Demonstrates debugging - Explains why reconstruction failed
-Shows iteration - Multiple approaches, improved results
-Production-minded - Discusses deployment constraints
-Measurable impact - 87% accuracy, 91% recall
-End-to-end - Data collection → training → deployment
-
-Technical depth:
-
-Autoencoder paradox and solution
-Feature-based vs reconstruction-based anomaly detection
-Trade-offs: precision vs recall, simplicity vs features
-Transfer learning benefits
-One-Class SVM for imbalanced data
-
-Engineering judgment:
-
-Chose fixed positioning over complex object detection
-Documented constraints clearly
-Planned future enhancements
-Balanced features with deployment timeline
-
-
-📚 References
-Datasets
-
-MVTec AD: Industry-standard anomaly detection benchmark (used for validation)
-
-https://www.mvtec.com/company/research/datasets/mvtec-ad
-
-
-
-Papers & Techniques
-
-ResNet: Deep Residual Learning for Image Recognition
-
-https://arxiv.org/abs/1512.03385
-
-
-One-Class SVM: Support Vector Method for Novelty Detection
-
-http://www.cs.columbia.edu/~jebara/4771/papers/svm-novelty.pdf
-
-
-Transfer Learning: A Survey on Transfer Learning
-
-https://ieeexplore.ieee.org/document/5288526
-
-
-
-Tools & Libraries
-
-PyTorch: https://pytorch.org/
-scikit-learn: https://scikit-learn.org/
-OpenCV: https://opencv.org/
-Streamlit: https://streamlit.io/
-
-
-🤝 Contributing
-This is a personal portfolio project, but feedback and suggestions are welcome!
-Areas for collaboration:
-
-Testing on different cat food types
-Multi-bowl scenarios
-Object detection integration
-Mobile app development
-
-
-📄 License
-MIT License - See LICENSE file for details.
-
-👤 Author
-[Your Name]
-
-GitHub: @yourusername
-LinkedIn: your-profile
-Email: your.email@example.com
-
-Background:
-
-Mechanical Engineer (7 years at Boeing)
-Transitioning to ML/AI
-Passionate about applying ML to real-world problems
-
-
-🙏 Acknowledgments
-
-MVTec AD dataset for validation testing
-PyTorch team for excellent deep learning framework
-scikit-learn for robust ML algorithms
-Anthropic's Claude for technical guidance and debugging assistance
-
-
-📞 Contact
-Questions about this project? Interested in collaboration?
-
-Open an issue on GitHub
-Connect on LinkedIn
-Email me directly
-
-
-Last updated: March 2026
-
-⭐ If you found this project interesting, please star the repository!
+MIT License — see [LICENSE](LICENSE) for details.
