@@ -273,7 +273,6 @@ Python, PyTorch, OpenCV, scikit-learn, Streamlit, NumPy, Pillow
 
 **Yuri Lazzeretti**
 - [LinkedIn](https://www.linkedin.com/in/yuri-lazzeretti-b63a22220/)
-- [Portfolio](https://www.datascienceportfol.io/ylazz001)
 - ylazz001@gmail.com
 
 Background: Mechanical engineer (Boeing, 6 years) transitioning to ML/AI. Master's with honours in Computer Science and Data Analytics.
